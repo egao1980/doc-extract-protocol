@@ -208,7 +208,7 @@
 (defun %attrs-from-comment (plist)
   (let ((reserved '(:id :type :kind :level :ordered :lang :alt :hash
                     :rows :cols :cells :layer :conf :ann :page :bbox :span
-                    :units :origin :lw :lh))
+                    :units :origin :lw :lh :close))
         (acc '()))
     (loop for (k v) on plist by #'cddr
           unless (member k reserved)
@@ -273,7 +273,10 @@
        (terpri stream)
        (terpri stream)
        (dolist (c (section-children block))
-         (%dump-block stream c profile (1+ depth)))))
+         (%dump-block stream c profile (1+ depth)))
+       (write-string "<!-- {close=section} -->" stream)
+       (terpri stream)
+       (terpri stream)))
     (text-block
      (ecase (or (text-block-kind block) :para)
        (:quote
@@ -498,7 +501,9 @@
                 (comment (parse-attribute-comment line)))
            (cond
              (comment
-              (enqueue-pending comment)
+              (if (getf comment :close)
+                  (when stack (pop stack))
+                  (enqueue-pending comment))
               (incf i)
               (go :loop))
              ((%blank-line-p line)

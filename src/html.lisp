@@ -106,15 +106,15 @@
                    (unless gt (return))
                    (let* ((raw (subseq html (1+ i) gt))
                           (closing (and (plusp (length raw)) (char= (char raw 0) #\/)))
+                          (name-start (if closing 1 0))
                           (name (string-downcase
-                                 (string-left-trim
-                                  "/"
-                                  (subseq raw 0 (or (position-if
-                                                     (lambda (c)
-                                                       (or (char= c #\Space)
-                                                           (char= c #\/)))
-                                                     raw)
-                                                    (length raw))))))
+                                 (subseq raw name-start
+                                         (or (position-if
+                                              (lambda (c)
+                                                (or (char= c #\Space)
+                                                    (char= c #\/)))
+                                              raw :start name-start)
+                                             (length raw)))))
                           (lvl (%heading-level name)))
                      (when (member name '("p" "div" "br" "li" "tr") :test #'string=)
                        (vector-push-extend #\Space text))
@@ -139,7 +139,9 @@
                    (incf i))))
     (dolist (sec sections)
       (setf (section-title sec)
-            (string-trim '(#\Space #\Tab #\Newline) (section-title sec))))
+            (string-trim '(#\Space #\Tab #\Newline) (section-title sec))
+            (section-text sec)
+            (string-trim '(#\Space #\Tab #\Newline) (section-text sec))))
     (list (string-trim '(#\Space #\Tab #\Newline)
                        (%decode-entities (coerce text 'string)))
           (nreverse sections))))
