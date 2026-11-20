@@ -1,6 +1,6 @@
 # doc-extract-protocol
 
-Lispy **CLOS** document extraction for [cl-stack](https://github.com/egao1980/cl-stack). Version **0.2** adds the canonical `extracted-document` block tree (`demiurge-doc/1`).
+Lispy **CLOS** document extraction for [cl-stack](https://github.com/egao1980/cl-stack). Version **0.3** reads markdown through `markdown-protocol` and keeps inline spans. Version **0.2** added the canonical `extracted-document` block tree (`demiurge-doc/1`).
 
 | System | Role | Repo |
 |--------|------|------|
@@ -31,7 +31,7 @@ Every backend normalizes into a typed block tree (`schema-protocol` `defschema`)
 - Offsets are Unicode **code-point** indices into the owning block's text
 - `(document-text doc &key layer)` is derived only — never stored
 - Lossless interchange: `dump-document` / `parse-extracted-document` (JSON data model) and `document->sexp` / `sexp->document`
-- Markup: `dump-markup` / `parse-markup` — CommonMark + `<!-- {#id …} -->` (lossy-tolerant)
+- Markup: `dump-markup` / `parse-markup` — CommonMark + `<!-- {#id …} -->` (lossy-tolerant). Markdown is read by [`markdown-protocol`](https://github.com/egao1980/markdown-protocol); emphasis, strong, strike, code spans and links become `annotation-span`s (`:emphasis` `:strong` `:strike` `:code` `:link` with the url as `target`) over the block's plain text, and `dump-markup` writes them back as markdown. `inlines-text-spans` maps markdown-protocol inlines to (text, spans)
 - Fidelity: `document-equivalent-p` at `:text`, `:structure`, `:strict`
 - Ids: `compute-block-id` / `ensure-ids` — portable SHA-256, override via `*block-digest-fn*`
 

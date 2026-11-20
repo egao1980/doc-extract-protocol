@@ -150,6 +150,7 @@
 
            #:dump-markup
            #:parse-markup
+           #:inlines-text-spans
 
            #:document-equivalent-p
 
