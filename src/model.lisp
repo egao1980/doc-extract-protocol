@@ -342,7 +342,7 @@
                    (let ((start pos))
                      (write-string text out)
                      (incf pos (length text))
-                     (when (block-id block)
+                     (when (and (slot-boundp block 'id) (block-id block))
                        (setf (gethash (block-id block) spans)
                              (list start pos)))))))
         (map-document-blocks

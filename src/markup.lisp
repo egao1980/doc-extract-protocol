@@ -262,173 +262,6 @@
   (write-string (%format-comment block :profile profile) stream)
   (terpri stream))
 
-(defun %dump-block (stream block profile heading-depth)
-  (%write-comment stream block profile)
-  (etypecase block
-    (section
-     (let ((depth (max 1 (min 6 (or (section-level block) heading-depth 1)))))
-       (dotimes (i depth) (write-char #\# stream))
-       (write-char #\Space stream)
-       (write-string (or (section-title block) "") stream)
-       (terpri stream)
-       (terpri stream)
-       (dolist (c (section-children block))
-         (%dump-block stream c profile (1+ depth)))
-       (write-string "<!-- {close=section} -->" stream)
-       (terpri stream)
-       (terpri stream)))
-    (text-block
-     (ecase (or (text-block-kind block) :para)
-       (:quote
-        (write-string "> " stream)
-        (write-string (or (text-block-text block) "") stream)
-        (terpri stream))
-       ((:para :heading)
-        (write-string (or (text-block-text block) "") stream)
-        (terpri stream)))
-     (terpri stream))
-    (code-block
-     (let* ((body (or (code-block-text block) ""))
-            (fence (if (search "```" body) "~~~~" "```")))
-       (write-string fence stream)
-       (when (code-block-language block)
-         (write-string (code-block-language block) stream))
-       (terpri stream)
-       (write-string body stream)
-       (unless (or (zerop (length body))
-                   (char= (char body (1- (length body))) #\Newline))
-         (terpri stream))
-       (write-string fence stream)
-       (terpri stream)
-       (terpri stream)))
-    (list-block
-     (loop for item in (list-block-items block)
-           for i from 1
-           do (%write-comment stream item profile)
-              (if (list-block-ordered-p block)
-                  (format stream "~d. " i)
-                  (write-string "- " stream))
-              (if (typep item 'list-block)
-                  (progn
-                    (terpri stream)
-                    (%dump-block stream item profile heading-depth))
-                  (progn
-                    (write-string (block-plain-text item) stream)
-                    (terpri stream))))
-     (terpri stream))
-    (table-block
-     (write-string (render-table block :format :markdown) stream)
-     (terpri stream))
-    (image-block
-     (format stream "![~a](~a)~%"
-             (or (image-block-alt block) "")
-             (if (image-block-content-hash block)
-                 (format nil "hash:~a" (image-block-content-hash block))
-                 ""))
-     (terpri stream))
-    (key-value-block
-     (format stream "**~a**: ~a~%"
-             (or (key-value-block-key block) "")
-             (or (key-value-block-value block) ""))
-     (terpri stream))))
-
-(defun dump-markup (doc &key (profile :llm) stream)
-  "Serialize DOC as CommonMark + attribute comments.
-   PROFILE :llm omits provenance; :archival keeps everything."
-  (check-type doc extracted-document)
-  (ensure-ids doc)
-  (flet ((emit (s)
-           (dolist (b (extracted-document-blocks doc))
-             (%dump-block s b profile 1))))
-    (if stream
-        (progn (emit stream) stream)
-        (with-output-to-string (s)
-          (emit s)))))
-
-(defun %blank-line-p (line)
-  (every (lambda (c) (member c '(#\Space #\Tab #\Return))) line))
-
-(defun %heading-line (line)
-  (let ((n 0))
-    (loop while (and (< n (length line)) (char= (char line n) #\#)
-                     (< n 6))
-          do (incf n))
-    (when (and (plusp n)
-               (< n (length line))
-               (char= (char line n) #\Space))
-      (values n (string-trim '(#\Space #\Tab) (subseq line (1+ n)))))))
-
-(defun %list-line (line)
-  (let ((s (string-left-trim '(#\Space #\Tab) line)))
-    (cond
-      ((and (>= (length s) 2)
-            (char= (char s 0) #\-)
-            (char= (char s 1) #\Space))
-       (values :ul (subseq s 2)))
-      ((and (>= (length s) 2)
-            (digit-char-p (char s 0)))
-       (let ((dot (position #\. s)))
-         (when (and dot
-                    (< (1+ dot) (length s))
-                    (char= (char s (1+ dot)) #\Space)
-                    (every #'digit-char-p (subseq s 0 dot)))
-           (values :ol (subseq s (+ dot 2))))))
-      (t (values nil nil)))))
-
-(defun %fence-line (line)
-  (let ((s (string-right-trim '(#\Space #\Tab #\Return) line)))
-    (cond
-      ((and (>= (length s) 3) (string= (subseq s 0 3) "```"))
-       (values t (subseq s 3)))
-      ((and (>= (length s) 4) (string= (subseq s 0 4) "~~~~"))
-       (values t (subseq s 4)))
-      (t (values nil nil)))))
-
-(defun %table-line-p (line)
-  (let ((s (string-trim '(#\Space #\Tab) line)))
-    (and (plusp (length s)) (char= (char s 0) #\|))))
-
-(defun %table-sep-p (line)
-  (let ((s (string-trim '(#\Space #\Tab) line)))
-    (and (plusp (length s))
-         (char= (char s 0) #\|)
-         (every (lambda (c) (member c '(#\| #\- #\: #\Space))) s))))
-
-(defun %split-row (line)
-  (let* ((s (string-trim '(#\Space #\Tab) line))
-         (s (string-trim '(#\|) s)))
-    (loop for start = 0 then (1+ bar)
-          for bar = (position #\| s :start start)
-          collect (string-trim '(#\Space #\Tab) (subseq s start (or bar (length s))))
-          while bar)))
-
-(defun %image-line (line)
-  (let ((s (string-trim '(#\Space #\Tab) line)))
-    (when (and (>= (length s) 5)
-               (char= (char s 0) #\!)
-               (char= (char s 1) #\[))
-      (let ((rb (position #\] s :start 2)))
-        (when (and rb (< (1+ rb) (length s)) (char= (char s (1+ rb)) #\())
-          (let ((rp (position #\) s :start (+ rb 2))))
-            (when rp
-              (values (subseq s 2 rb) (subseq s (+ rb 2) rp)))))))))
-
-(defun %kv-line (line)
-  (let ((s (string-trim '(#\Space #\Tab) line)))
-    (when (and (>= (length s) 5)
-               (char= (char s 0) #\*)
-               (char= (char s 1) #\*))
-      (let ((end (search "**: " s :start2 2)))
-        (when end
-          (values (subseq s 2 end) (subseq s (+ end 4))))))))
-
-(defun %quote-line (line)
-  (let ((s (string-left-trim '(#\Space #\Tab) line)))
-    (when (and (>= (length s) 2)
-               (char= (char s 0) #\>)
-               (char= (char s 1) #\Space))
-      (subseq s 2))))
-
 (defun %make-from-comment (plist &key default-type)
   (let* ((type (%kw (or (getf plist :type) default-type) :text))
          (block
@@ -454,230 +287,393 @@
     (%apply-comment block plist)
     block))
 
+
+(defun %text-spans (block)
+  (and (typep block 'text-block) (%bound block 'annotations)))
+
+(defun %write-prefixed (stream text first rest)
+  "TEXT's lines to STREAM, the first after FIRST, the others after REST."
+  (loop for start = 0 then (1+ nl)
+        for nl = (position #\Newline text :start start)
+        for prefix = first then rest
+        do (write-string prefix stream)
+           (write-string text stream :start start :end (or nl (length text)))
+           (terpri stream)
+        while nl))
+
+(defun %dump-table (stream table)
+  (multiple-value-bind (grid rows cols) (%table-grid table)
+    (unless (or (zerop rows) (zerop cols))
+      (let ((cells (make-array (list rows cols) :initial-element nil)))
+        (dolist (cell (or (%bound table 'cells) nil))
+          (let ((r (table-cell-row cell)) (c (table-cell-col cell)))
+            (when (and r c (< -1 r rows) (< -1 c cols))
+              (setf (aref cells r c) cell))))
+        (flet ((cell-markup (r c)
+                 (let* ((cell (aref cells r c))
+                        (content (and cell (%bound cell 'content)))
+                        (text (substitute #\Space #\Newline (aref grid r c))))
+                   (if (and (= 1 (length content)) (typep (first content) 'text-block))
+                       (markup-inline text (%text-spans (first content)))
+                       (markup-escape text)))))
+          (dotimes (r rows)
+            (write-string "|" stream)
+            (dotimes (c cols)
+              (format stream " ~a |" (cell-markup r c)))
+            (terpri stream)
+            (when (zerop r)
+              (write-string "|" stream)
+              (dotimes (c cols) (write-string " --- |" stream))
+              (terpri stream))))))))
+
+(defun %dump-block (stream block profile heading-depth)
+  (%write-comment stream block profile)
+  (etypecase block
+    (section
+     (let ((depth (max 1 (min 6 (or (section-level block) heading-depth 1)))))
+       (dotimes (i depth) (write-char #\# stream))
+       (write-char #\Space stream)
+       (write-string (substitute #\Space #\Newline
+                                 (markup-escape (or (section-title block) "")))
+                     stream)
+       (terpri stream)
+       (terpri stream)
+       (dolist (c (section-children block))
+         (%dump-block stream c profile (1+ depth)))
+       (write-string "<!-- {close=section} -->" stream)
+       (terpri stream)
+       (terpri stream)))
+    (text-block
+     (let ((text (markup-inline (text-block-text block) (%text-spans block))))
+       (ecase (or (text-block-kind block) :para)
+         (:quote (%write-prefixed stream text "> " "> "))
+         ((:para :heading) (%write-prefixed stream text "" ""))))
+     (terpri stream))
+    (code-block
+     (let* ((body (or (code-block-text block) ""))
+            (fence (if (search "```" body) "~~~~" "```")))
+       (write-string fence stream)
+       (let ((language (%bound block 'language)))
+         (when language
+           (write-string language stream)))
+       (terpri stream)
+       (write-string body stream)
+       (unless (or (zerop (length body))
+                   (char= (char body (1- (length body))) #\Newline))
+         (terpri stream))
+       (write-string fence stream)
+       (terpri stream)
+       (terpri stream)))
+    (list-block
+     (loop for item in (or (%bound block 'items) nil)
+           for i from 1
+           do (%write-comment stream item profile)
+              (let ((marker (if (list-block-ordered-p block) (format nil "~d. " i) "- ")))
+                (if (typep item 'list-block)
+                    (progn
+                      (write-string (string-right-trim " " marker) stream)
+                      (terpri stream)
+                      (%dump-block stream item profile heading-depth))
+                    (%write-prefixed stream
+                                     (if (typep item 'text-block)
+                                         (markup-inline (text-block-text item)
+                                                        (%text-spans item))
+                                         (markup-escape (block-plain-text item)))
+                                     marker
+                                     (make-string (length marker)
+                                                  :initial-element #\Space)))))
+     (terpri stream))
+    (table-block
+     (%dump-table stream block)
+     (terpri stream))
+    (image-block
+     (format stream "![~a](~a)~%"
+             (markup-escape (or (%bound block 'alt) ""))
+             (let ((hash (%bound block 'content-hash)))
+               (if hash (format nil "hash:~a" hash) "")))
+     (terpri stream))
+    (key-value-block
+     (format stream "**~a**: ~a~%"
+             (markup-escape (or (key-value-block-key block) ""))
+             (markup-escape (or (key-value-block-value block) "")))
+     (terpri stream))))
+
+(defun dump-markup (doc &key (profile :llm) stream)
+  "Serialize DOC as CommonMark + attribute comments.
+   PROFILE :llm omits provenance; :archival keeps everything. Text is
+   escaped so PARSE-MARKUP reads it back; emphasis, strong, strike, code
+   and link annotation spans are written as markdown when they nest."
+  (check-type doc extracted-document)
+  (ensure-ids doc)
+  (flet ((emit (s)
+           (dolist (b (extracted-document-blocks doc))
+             (%dump-block s b profile 1))))
+    (if stream
+        (progn (emit stream) stream)
+        (with-output-to-string (s)
+          (emit s)))))
+
+;;; ------------------------------------------------------------------
+;;; Reading. The text is split at attribute-comment lines (outside fenced
+;;; code); each run of other lines is parsed by markdown-protocol and its
+;;; blocks are mapped onto the model, taking the pending comments in order
+;;; as before. A list split by item comments is one list again: a list run
+;;; that ends on a non-blank line, followed only by comments that are not
+;;; type=list, continues into the next run's leading list.
+
+(defun %markup-text (input)
+  (etypecase input
+    (string input)
+    (pathname
+     (with-open-file (s input :direction :input)
+       (let ((buf (make-string (file-length s))))
+         (subseq buf 0 (read-sequence buf s)))))
+    ((vector (unsigned-byte 8)) (utf8-decode input))))
+
+(defun %markup-lines (text)
+  (let ((acc '()) (start 0))
+    (loop for i from 0 below (length text)
+          when (char= (char text i) #\Newline)
+            do (push (subseq text start i) acc)
+               (setf start (1+ i)))
+    (when (< start (length text))
+      (push (subseq text start) acc))
+    (nreverse acc)))
+
+(defun %blank-line-p (line)
+  (every (lambda (c) (member c '(#\Space #\Tab #\Return))) line))
+
+(defun %fence-run (line)
+  "→ (values char length) when LINE opens or closes a fence, else NIL."
+  (let* ((s (string-right-trim '(#\Return) line))
+         (ind (or (position #\Space s :test-not #'char=) (length s))))
+    (when (and (<= ind 3) (< ind (length s)) (find (char s ind) "`~"))
+      (let* ((ch (char s ind))
+             (end (or (position ch s :start ind :test-not #'char=) (length s)))
+             (len (- end ind)))
+        (when (>= len 3)
+          (values ch len (%blank-line-p (subseq s end))))))))
+
+(defun %comment-line (line)
+  "The attribute plist of an attribute-comment LINE, else NIL."
+  (let ((s (string-trim '(#\Space #\Tab #\Return) line)))
+    (and (>= (length s) 4)
+         (string= "<!--" s :end2 4)
+         (parse-attribute-comment s))))
+
+(defun %markup-runs (lines)
+  "LINES → a list of (:comment plist) and (:text string ends-blank-p)."
+  (let ((runs '()) (current '()) (fence nil))
+    (flet ((flush ()
+             (when current
+               (push (list :text (format nil "~{~a~%~}" (reverse current))
+                           (%blank-line-p (first current)))
+                     runs)
+               (setf current '()))))
+      (dolist (line lines)
+        (let ((comment (and (not fence) (%comment-line line))))
+          (if comment
+              (progn (flush) (push (list :comment comment) runs))
+              (progn
+                (multiple-value-bind (ch len only-ws) (%fence-run line)
+                  (cond ((null ch))
+                        ((null fence) (setf fence (cons ch len)))
+                        ((and (char= ch (car fence)) (>= len (cdr fence)) only-ws)
+                         (setf fence nil))))
+                (push line current)))))
+      (flush))
+    (nreverse runs)))
+
+(defparameter +markup-block-types+
+  '(:section :text :list :code :table :image :key-value))
+
+(defun %block-from (plist type class)
+  "A block of CLASS for pending comment PLIST (or none). TYPE is the
+default type keyword. A comment whose type does not fit the content still
+gives its id, attributes and provenance."
+  (let ((ptype (and plist (%kw (getf plist :type)))))
+    (if (and plist (or (null ptype) (member ptype +markup-block-types+)))
+        (let ((b (%make-from-comment plist :default-type type)))
+          (if (typep b class)
+              b
+              (%apply-comment (%make-from-comment nil :default-type type) plist)))
+        (let ((b (%make-from-comment nil :default-type type)))
+          (if plist (%apply-comment b plist) b)))))
+
+(defun %set-text (block text spans)
+  "Set a text BLOCK's TEXT; SPANS unless its comment gave annotations."
+  (setf (text-block-text block) text)
+  (when (and spans (null (%bound block 'annotations)))
+    (setf (text-block-annotations block) spans))
+  block)
+
+(defun %image-paragraph (inlines)
+  "→ (values alt url) for a paragraph that is exactly ![alt](url)."
+  (when (and (= 2 (length inlines))
+             (equal "!" (first inlines))
+             (consp (second inlines))
+             (eq :link (first (second inlines))))
+    (values (inlines-text-spans (third (second inlines)))
+            (second (second inlines)))))
+
+(defun %kv-paragraph (inlines)
+  "→ (values key value) for a one-line paragraph **key**: value."
+  (let ((k (first inlines)) (rest (rest inlines)))
+    (when (and (consp k) (eq :strong (first k))
+               (stringp (first rest))
+               (>= (length (first rest)) 2)
+               (string= ": " (first rest) :end2 2)
+               (notany (lambda (x) (and (consp x) (member (first x) '(:soft-break :hard-break))))
+                       inlines))
+      (values (inlines-text-spans (second k))
+              (inlines-text-spans (cons (subseq (first rest) 2) (rest rest)))))))
+
 (defun parse-markup (input)
-  "Parse CommonMark + attribute comments into an EXTRACTED-DOCUMENT."
-  (let* ((text (etypecase input
-                 (string input)
-                 (pathname
-                  (with-open-file (s input :direction :input)
-                    (let ((buf (make-string (file-length s))))
-                      (read-sequence buf s)
-                      buf)))
-                 ((vector (unsigned-byte 8)) (utf8-decode input))))
-         (lines (let ((acc '())
-                      (start 0))
-                  (loop for i from 0 below (length text)
-                        when (char= (char text i) #\Newline)
-                          do (push (subseq text start i) acc)
-                             (setf start (1+ i)))
-                  (push (subseq text start) acc)
-                  (nreverse acc)))
-         (roots '())
-         (stack '())
-         (pending '())
-         (i 0)
-         (n (length lines)))
-    (labels ((add-root (b)
+  "Parse CommonMark + attribute comments into an EXTRACTED-DOCUMENT.
+   Markdown is read by markdown-protocol. Paragraphs, quotes, list items
+   and table cells keep their inline emphasis, strong, strike, code and
+   links as ANNOTATION-SPANs over the plain text (an ann= comment, when
+   present, gives the annotations instead)."
+  (let ((roots '())
+        (stack '())
+        (pending '())
+        (open-list nil))
+    (labels ((attach (b)
                (if stack
                    (push b (section-children (cdr (first stack))))
                    (push b roots)))
-             (enqueue-pending (plist)
-               (setf pending (nconc pending (list plist))))
-             (take-pending ()
-               (pop pending))
+             (take-pending () (pop pending))
              (take-pending-of (type)
-               (let ((hit (find-if (lambda (p)
-                                     (eq (%kw (getf p :type)) type))
-                                   pending)))
+               (let ((hit (find-if (lambda (p) (eq (%kw (getf p :type)) type)) pending)))
                  (when hit
                    (setf pending (remove hit pending :count 1 :test #'eq)))
                  hit))
-             (attach (block)
-               (add-root block)))
-      (tagbody
-       :loop
-         (when (>= i n) (go :done))
-         (let* ((line (nth i lines))
-                (comment (parse-attribute-comment line)))
-           (cond
-             (comment
-              (if (getf comment :close)
-                  (when stack (pop stack))
-                  (enqueue-pending comment))
-              (incf i)
-              (go :loop))
-             ((%blank-line-p line)
-              (incf i)
-              (go :loop)))
-           (multiple-value-bind (depth title) (%heading-line line)
-             (when depth
-               (let ((block (%make-from-comment
-                             (or (take-pending-of :section) (take-pending)
-                                 (list :type "section" :level
-                                       (princ-to-string depth)))
-                             :default-type :section)))
-                 (setf (section-title block) title
-                       (section-level block) depth)
-                 (loop while (and stack (>= (car (first stack)) depth))
+             (text-block-of (text spans &optional kind)
+               (let ((b (%block-from (take-pending) :text 'text-block)))
+                 (when kind (setf (text-block-kind b) kind))
+                 (%set-text b text spans)))
+             (list-items (items)
+               (loop for item in items
+                     for texts = (remove-if (lambda (b) (member (first b) '(:bullet-list :ordered-list)))
+                                            item)
+                     when (or texts (null item))
+                       collect (multiple-value-bind (text spans) (%blocks-text-spans texts)
+                                 (text-block-of text spans))
+                     nconc (loop for b in item
+                                 when (member (first b) '(:bullet-list :ordered-list))
+                                   collect (new-list b nil))))
+             (new-list (b pending-p)
+               (let* ((ordered (eq (first b) :ordered-list))
+                      (list (%block-from (and pending-p (take-pending-of :list)) :list 'list-block)))
+                 (setf (list-block-ordered-p list) ordered
+                       (list-block-items list) (list-items (if ordered (fifth b) (third b))))
+                 list))
+             (heading (level inlines)
+               (let ((b (%block-from (or (take-pending-of :section) (take-pending))
+                                     :section 'section)))
+                 (setf (section-title b) (substitute #\Space #\Newline (inlines-text-spans inlines))
+                       (section-level b) level)
+                 (loop while (and stack (>= (car (first stack)) level))
                        do (pop stack))
-                 (if stack
-                     (push block (section-children (cdr (first stack))))
-                     (push block roots))
-                 (push (cons depth block) stack)
-                 (incf i)
-                 (go :loop))))
-           (multiple-value-bind (fenced lang) (%fence-line line)
-             (when fenced
-               (incf i)
-               (let ((body (make-string-output-stream)))
-                 (loop while (< i n)
-                       for ln = (nth i lines)
-                       do (multiple-value-bind (end) (%fence-line ln)
-                            (when end
-                              (incf i)
-                              (return))
-                            (write-string ln body)
-                            (terpri body)
-                            (incf i)))
-                 (let ((block (%make-from-comment
-                               (or (take-pending) (list :type "code"))
-                               :default-type :code)))
-                   (setf (code-block-text block)
-                         (string-right-trim '(#\Newline)
-                                            (get-output-stream-string body)))
-                   (when (and lang (plusp (length lang))
-                              (not (code-block-language block)))
-                     (setf (code-block-language block) lang))
-                   (attach block)))
-               (go :loop)))
-           (when (%table-line-p line)
-             (let ((rows '())
-                   (header nil)
-                   (plist (or (take-pending) (list :type "table"))))
-               (loop while (and (< i n) (%table-line-p (nth i lines)))
-                     do (if (%table-sep-p (nth i lines))
-                            (setf header t)
-                            (push (%split-row (nth i lines)) rows))
-                        (incf i))
-               (setf rows (nreverse rows))
-               (let* ((ncols (if rows (length (first rows)) 0))
-                      (nrows (length rows))
-                      (cells '())
-                      (block (%make-from-comment plist :default-type :table)))
-                 (loop for row in rows
-                       for r from 0
-                       do (loop for text in row
-                                for c from 0
-                                do (push (make-table-cell
-                                          :row r :col c
-                                          :header-p (and header (zerop r))
-                                          :content
-                                          (list (make-text-block :text text)))
-                                         cells)))
-                 (setf (table-block-rows block) nrows
-                       (table-block-cols block) ncols
-                       (table-block-cells block) (nreverse cells))
+                 (attach b)
+                 (push (cons level b) stack)))
+             (paragraph (inlines)
+               (multiple-value-bind (alt url) (%image-paragraph inlines)
+                 (when alt
+                   (let ((b (%block-from (take-pending) :image 'image-block)))
+                     (setf (image-block-alt b) alt)
+                     (when (and (>= (length url) 5) (string= "hash:" url :end2 5))
+                       (setf (image-block-content-hash b) (subseq url 5)))
+                     (return-from paragraph (attach b)))))
+               (multiple-value-bind (k v) (%kv-paragraph inlines)
+                 (when k
+                   (let ((b (%block-from (take-pending) :key-value 'key-value-block)))
+                     (setf (key-value-block-key b) k
+                           (key-value-block-value b) v)
+                     (return-from paragraph (attach b)))))
+               (multiple-value-bind (text spans) (inlines-text-spans inlines)
+                 (attach (text-block-of text spans))))
+             (table (header rows)
+               (let* ((plist (take-pending))
+                      (b (%block-from plist :table 'table-block))
+                      (all (cons header rows))
+                      (cells (loop for row in all
+                                   for r from 0
+                                   nconc (loop for cell in row
+                                               for c from 0
+                                               collect (make-table-cell
+                                                        :row r :col c :header-p (zerop r)
+                                                        :content
+                                                        (list (multiple-value-bind (text spans)
+                                                                  (inlines-text-spans cell)
+                                                                (make-text-block
+                                                                 :text text :annotations spans))))))))
+                 (setf (table-block-rows b) (length all)
+                       (table-block-cols b) (length header)
+                       (table-block-cells b) cells)
                  (let ((raw (getf plist :cells)))
                    (when raw
                      (mapc (lambda (child id)
                              (when (and id (plusp (length id)))
                                (setf (block-id child) id)))
-                           (block-children block)
+                           (block-children b)
                            (loop for start = 0 then (1+ comma)
                                  for comma = (position #\, raw :start start)
                                  collect (subseq raw start (or comma (length raw)))
                                  while comma))))
-                 (attach block)))
-             (go :loop))
-           (multiple-value-bind (alt href) (%image-line line)
-             (when alt
-               (let* ((hash (when (and href
-                                       (>= (length href) 5)
-                                       (string= (subseq href 0 5) "hash:"))
-                              (subseq href 5)))
-                      (block (%make-from-comment
-                              (or (take-pending) (list :type "image"))
-                              :default-type :image)))
-                 (setf (image-block-alt block) alt)
-                 (when hash
-                   (setf (image-block-content-hash block) hash))
-                 (attach block)
-                 (incf i)
-                 (go :loop))))
-           (multiple-value-bind (k v) (%kv-line line)
-             (when k
-               (let ((block (%make-from-comment
-                             (or (take-pending) (list :type "key-value"))
-                             :default-type :key-value)))
-                 (setf (key-value-block-key block) k
-                       (key-value-block-value block) v)
-                 (attach block)
-                 (incf i)
-                 (go :loop))))
-           (let ((q (%quote-line line)))
-             (when q
-               (let ((block (%make-from-comment
-                             (or (take-pending)
-                                 (list :type "text" :kind "quote"))
-                             :default-type :text)))
-                 (setf (text-block-kind block) :quote
-                       (text-block-text block) q)
-                 (attach block)
-                 (incf i)
-                 (go :loop))))
-           (multiple-value-bind (style item-text) (%list-line line)
-             (declare (ignore item-text))
-             (when style
-               (let ((items '())
-                     (list (%make-from-comment
-                            (or (take-pending-of :list)
-                                (list :type "list"
-                                      :ordered (if (eq style :ol)
-                                                   "true" "false")))
-                            :default-type :list)))
-                 (when (typep list 'list-block)
-                   (setf (list-block-ordered-p list) (eq style :ol)))
-                 (loop while (< i n)
-                       for ln = (nth i lines)
-                       do (cond
-                            ((parse-attribute-comment ln)
-                             (enqueue-pending (parse-attribute-comment ln))
-                             (incf i))
-                            ((%blank-line-p ln)
-                             (incf i)
-                             (when (and (< i n)
-                                        (%blank-line-p (nth i lines)))
-                               (return)))
-                            ((nth-value 0 (%list-line ln))
-                             (multiple-value-bind (st txt)
-                                 (%list-line ln)
-                               (declare (ignore st))
-                               (let ((item (%make-from-comment
-                                            (or (take-pending)
-                                                (list :type "text"))
-                                            :default-type :text)))
-                                 (setf (text-block-text item) txt)
-                                 (push item items)))
-                             (incf i))
-                            (t (return))))
-                 (setf (list-block-items list) (nreverse items))
-                 (attach list)
-                 (go :loop))))
-           (let ((block (%make-from-comment
-                         (or (take-pending) (list :type "text"))
-                         :default-type :text)))
-             (setf (text-block-text block)
-                   (string-trim '(#\Space #\Tab #\Return) line))
-             (attach block)
-             (incf i)
-             (go :loop)))
-       :done))
+                 (attach b)))
+             (md-block (b)
+               (ecase (first b)
+                 (:heading (heading (second b) (third b)))
+                 (:paragraph (paragraph (second b)))
+                 (:thematic-break (attach (text-block-of "---" nil)))
+                 (:block-quote
+                  (multiple-value-bind (text spans) (%blocks-text-spans (second b))
+                    (attach (text-block-of text spans :quote))))
+                 (:code-block
+                  (let ((c (%block-from (take-pending) :code 'code-block)))
+                    (setf (code-block-text c)
+                          (string-right-trim '(#\Newline) (format nil "~{~a~^~%~}" (third b))))
+                    (when (and (second b) (not (%bound c 'language)))
+                      (setf (code-block-language c) (second b)))
+                    (attach c)))
+                 ((:bullet-list :ordered-list) (attach (new-list b t)))
+                 (:table (table (third b) (fourth b)))))
+             (continues-list-p (b)
+               (and open-list
+                    (member (first b) '(:bullet-list :ordered-list))
+                    (eq (list-block-ordered-p open-list) (eq (first b) :ordered-list))
+                    (notany (lambda (p) (eq (%kw (getf p :type)) :list)) pending))))
+      (dolist (run (%markup-runs (%markup-lines (%markup-text input))))
+        (ecase (first run)
+          (:comment
+           (let ((plist (second run)))
+             (if (getf plist :close)
+                 (progn (when stack (pop stack))
+                        (setf open-list nil))
+                 (setf pending (nconc pending (list plist))))))
+          (:text
+           (let ((blocks (markdown-protocol:parse-markdown (second run))))
+             (when blocks
+               (when (continues-list-p (first blocks))
+                 (let ((b (pop blocks)))
+                   (setf (list-block-items open-list)
+                         (append (%bound open-list 'items)
+                                 (list-items (if (eq (first b) :ordered-list)
+                                                 (fifth b)
+                                                 (third b))))))))
+             (mapc #'md-block blocks)
+             (setf open-list
+                   (let ((last (if stack
+                                   (first (section-children (cdr (first stack))))
+                                   (first roots))))
+                     (and (not (third run))
+                          (typep last 'list-block)
+                          last))))))))
     (labels ((fix (b)
                (when (typep b 'section)
                  (setf (section-children b)
-                       (nreverse (section-children b)))
-                 (mapc #'fix (section-children b)))
-               (when (typep b 'list-block)
-                 (mapc #'fix (list-block-items b)))))
+                       (nreverse (or (%bound b 'children) nil)))
+                 (mapc #'fix (section-children b)))))
       (mapc #'fix roots))
     (make-extracted-document :blocks (nreverse roots))))
