@@ -148,6 +148,10 @@
            #:portable-digest
            #:utf8-encode
 
+           #:*source-encoding*
+           #:decode-source-octets
+           #:declared-charset
+
            #:dump-markup
            #:parse-markup
            #:inlines-text-spans

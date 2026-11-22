@@ -104,7 +104,7 @@
            (ent (find name list :key ename :test #'string=)))
       (when ent
         (let ((octets (funcall read archive ent)))
-          (map 'string #'code-char octets))))))
+          (decode-source-octets octets :encoding nil))))))
 
 (defun %open-zip (source)
   (let* ((pkg (find-package :compression-protocol))

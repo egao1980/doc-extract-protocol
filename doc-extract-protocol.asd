@@ -1,13 +1,16 @@
 (defsystem "doc-extract-protocol"
-  :version "0.3.0"
+  :version "0.3.1"
   :description "CLOS document extraction + canonical extracted-document model"
   :author "egao1980"
   :license "MIT"
-  :depends-on ("schema-protocol" (:version "markdown-protocol" "0.1.0"))
+  :depends-on ("schema-protocol" (:version "markdown-protocol" "0.1.0")
+               (:version "encoding-protocol" "0.3.0")
+               "crypto-protocol" "crypto-backend-ironclad")
   :serial t
   :pathname "src"
   :components ((:file "package")
                (:file "conditions")
+               (:file "text-decode")
                (:file "model")
                (:file "ids")
                (:file "markup-spans")
@@ -27,6 +30,7 @@
   :components ((:file "package")
                (:file "helpers")
                (:file "protocol-test")
+               (:file "decode-test")
                (:file "model-test")
                (:file "ids-test")
                (:file "markup-test")
