@@ -71,12 +71,9 @@
 (defun %source-string (source)
   (etypecase source
     (string source)
-    (pathname (with-open-file (s source :direction :input)
-                (let ((buf (make-string (file-length s))))
-                  (read-sequence buf s)
-                  buf)))
+    (pathname (decode-source-octets (read-source-octets source)))
     ((vector (unsigned-byte 8))
-     (map 'string #'code-char source))))
+     (decode-source-octets source))))
 
 (defgeneric extract-text (backend source &key format)
   (:documentation "Plain text of SOURCE. FORMAT :html :docx :xlsx :pdf
