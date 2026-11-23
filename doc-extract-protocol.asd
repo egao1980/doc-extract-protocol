@@ -24,7 +24,8 @@
   :in-order-to ((test-op (test-op "doc-extract-protocol/tests"))))
 
 (defsystem "doc-extract-protocol/tests"
-  :depends-on ("doc-extract-protocol" "rove")
+  ;; compression-backend-chipz: zip reader for the DOCX / XLSX fixtures.
+  :depends-on ("doc-extract-protocol" "compression-backend-chipz" "rove")
   :pathname "tests"
   :serial t
   :components ((:file "package")
@@ -36,7 +37,8 @@
                (:file "markup-test")
                (:file "markup-spans-test")
                (:file "normalize-test")
-               (:file "registry-test"))
+               (:file "registry-test")
+               (:file "office-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)
                (error "tests failed for ~A" (component-name c)))))
