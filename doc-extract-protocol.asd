@@ -1,5 +1,5 @@
 (defsystem "doc-extract-protocol"
-  :version "0.3.0"
+  :version "0.3.1"
   :description "CLOS document extraction + canonical extracted-document model"
   :author "egao1980"
   :license "MIT"

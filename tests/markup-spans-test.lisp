@@ -104,6 +104,33 @@
     (ok (equal "lisp" (doc-extract-protocol:code-block-language (third blocks))))
     (ok (equal "(+ 1 2)" (doc-extract-protocol:code-block-text (third blocks))))))
 
+(deftest markup-image-inlines
+  ;; The AST, not source: markdown-protocol 0.2.0 parses ![alt](url) to
+  ;; (:image url alt); 0.1.0 gave "!" + (:link url alt).
+  (multiple-value-bind (text spans)
+      (doc-extract-protocol:inlines-text-spans
+       '("see " (:image "i.png" ("a " (:emph ("fig")))) "."))
+    (ok (equal "see a fig." text) "an inline image contributes its alt text")
+    (ok (equal '((4 9 :image "i.png") (6 9 :emphasis nil))
+               (mapcar (lambda (s)
+                         (list (doc-extract-protocol:annotation-span-start s)
+                               (doc-extract-protocol:annotation-span-end s)
+                               (doc-extract-protocol:annotation-span-kind s)
+                               (and (slot-boundp s 'doc-extract-protocol::target)
+                                    (doc-extract-protocol:annotation-span-target s))))
+                       spans))
+        ":image span over the alt, url as target"))
+  (ok (equal '("fig" "hash:abc")
+             (multiple-value-list
+              (doc-extract-protocol::%image-paragraph '((:image "hash:abc" ("fig"))))))
+      "image paragraph, 0.2.0 shape")
+  (ok (equal '("fig" "hash:abc")
+             (multiple-value-list
+              (doc-extract-protocol::%image-paragraph '("!" (:link "hash:abc" ("fig"))))))
+      "image paragraph, 0.1.0 shape")
+  (ok (null (doc-extract-protocol::%image-paragraph '("x " (:image "i.png" ("fig")))))
+      "an image with text around it is not an image block"))
+
 (deftest markup-comments-around-markdown
   (let* ((md (format nil "<!-- {#L type=list} -->~%<!-- {#a type=text} -->~%- *a*~%<!-- {#b type=text} -->~%- b~%~%"))
          (l (first (%blocks md))))

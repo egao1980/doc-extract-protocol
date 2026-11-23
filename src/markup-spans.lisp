@@ -9,6 +9,9 @@
 ;;;   (:emph …)       → :emphasis        (:strong …) → :strong
 ;;;   (:strike …)     → :strike          (:code s)   → :code
 ;;;   (:link url …)   → :link, TARGET url (NIL when url is "")
+;;;   (:image url alt) inside text → :image over the alt text, TARGET url
+;;;   (archival only: markup writes the alt as text; a paragraph that is
+;;;   just an image is an IMAGE-BLOCK, not a text block)
 ;;;
 ;;; Soft and hard breaks become #\Newline. Spans are listed outer first,
 ;;; then by start. DUMP-MARKUP writes these kinds back as markdown when they
@@ -21,7 +24,7 @@
 (defun %inline-node-kind (node)
   (case (first node)
     (:emph :emphasis) (:strong :strong) (:strike :strike)
-    (:code :code) (:link :link)))
+    (:code :code) (:link :link) (:image :image)))
 
 (defun %write-inlines (inlines out pos spans)
   "Write INLINES' text to OUT starting at offset POS. → (values pos spans),
@@ -42,8 +45,9 @@ SPANS with this run's spans pushed (outer pushed first)."
          (incf pos (length s))))
       (t
        (let* ((kind (%inline-node-kind x))
-              (url (and (eq kind :link) (second x)))
-              (children (if (eq kind :link) (third x) (second x)))
+              (target-p (member kind '(:link :image)))
+              (url (and target-p (second x)))
+              (children (if target-p (third x) (second x)))
               (span (make-annotation-span :start pos :end pos :kind kind
                                           :target (and url (plusp (length url)) url))))
          (push span spans)
