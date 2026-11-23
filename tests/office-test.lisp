@@ -271,13 +271,16 @@
       (ok (equal "Inhalt" (doc-extract-protocol:section-text (first secs)))))))
 
 (defparameter *worksheet-edges-xml*
-  (format nil "<worksheet xmlns=\"~a\"><sheetData>~
-<row r=\"2\"><c r=\"B2\" t=\"inlineStr\"><is><r><t>Na</t></r><r><t>me</t></r><rPh sb=\"0\" eb=\"1\"><t>ナ</t></rPh></is></c><c r=\"D2\" t=\"inlineStr\"><is><t>Flag</t></is></c></row>~
-<row r=\"3\"><c r=\"B3\" t=\"b\"><v>1</v></c><c r=\"C3\" t=\"e\"><v>#DIV/0!</v></c><c r=\"D3\" t=\"str\"><f>A1&amp;\"x\"</f><v>ax</v></c></row>~
-<row><c><v>7</v></c><c><v>8.5</v></c></row>~
-<row r=\"6\"><c r=\"B6\" s=\"1\"/><c r=\"C6\"><f>1/0</f></c></row>~
-</sheetData><mergeCells count=\"1\"><mergeCell ref=\"B2:C2\"/></mergeCells></worksheet>"
-          *s-ns*))
+  ;; One string per row, no ~<newline> directives: a Windows (CRLF)
+  ;; checkout turns those into ~<return>, which FORMAT rejects.
+  (concatenate
+   'string
+   (format nil "<worksheet xmlns=\"~a\"><sheetData>" *s-ns*)
+   "<row r=\"2\"><c r=\"B2\" t=\"inlineStr\"><is><r><t>Na</t></r><r><t>me</t></r><rPh sb=\"0\" eb=\"1\"><t>ナ</t></rPh></is></c><c r=\"D2\" t=\"inlineStr\"><is><t>Flag</t></is></c></row>"
+   "<row r=\"3\"><c r=\"B3\" t=\"b\"><v>1</v></c><c r=\"C3\" t=\"e\"><v>#DIV/0!</v></c><c r=\"D3\" t=\"str\"><f>A1&amp;\"x\"</f><v>ax</v></c></row>"
+   "<row><c><v>7</v></c><c><v>8.5</v></c></row>"
+   "<row r=\"6\"><c r=\"B6\" s=\"1\"/><c r=\"C6\"><f>1/0</f></c></row>"
+   "</sheetData><mergeCells count=\"1\"><mergeCell ref=\"B2:C2\"/></mergeCells></worksheet>"))
 
 (deftest xlsx-worksheet-cell-types-and-layout
   "Inline rich text (no phonetic runs), booleans, errors, string formulas,
