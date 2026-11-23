@@ -56,6 +56,9 @@
  (:system "secrets-protocol" :version "0.1.3" :index-digest
   "sha256:b1becd1890f5f49748df161403e5f83f3c8c89488168ddec6dd966d0178ba69a"
   :registry "https://ghcr.io")
+ (:system "serdes-protocol" :version "0.2.2" :index-digest
+  "sha256:a78026c6c80764b78530a2306b07fdbd470270f54267290053afa93ee4c05333"
+  :registry "https://ghcr.io")
  (:system "trivial-features" :version "1.0" :index-digest
   "sha256:065c5a762d8346b68c55d522577d611f5e084f8d0638e3217be822951a18009b"
   :registry "https://ghcr.io")
@@ -64,4 +67,7 @@
   :registry "https://ghcr.io")
  (:system "trivial-gray-streams" :version "2.1" :index-digest
   "sha256:3e24b9712a66f2325b95c553d2da0e975a3646751bb061076e1b3248e22a3534"
+  :registry "https://ghcr.io")
+ (:system "xml-protocol" :version "0.1.0" :index-digest
+  "sha256:f442f6a1ee027e5e6890a08ed350cf66a6718ed603fead2674a9b6a687d0145b"
   :registry "https://ghcr.io"))

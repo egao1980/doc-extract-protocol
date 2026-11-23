@@ -1,11 +1,15 @@
 (defsystem "doc-extract-protocol"
-  :version "0.3.1"
+  :version "0.4.0"
   :description "CLOS document extraction + canonical extracted-document model"
   :author "egao1980"
   :license "MIT"
   :depends-on ("schema-protocol" (:version "markdown-protocol" "0.1.0")
                (:version "encoding-protocol" "0.3.0")
-               "crypto-protocol" "crypto-backend-ironclad")
+               "crypto-protocol" "crypto-backend-ironclad"
+               ;; DOCX / XLSX: zip parts read with compression-protocol (deflate by
+               ;; the chipz backend), parsed with xml-protocol (native backend).
+               (:version "compression-protocol" "0.4.0") "compression-backend-chipz"
+               (:version "xml-protocol" "0.1.0") "xml-backend-native")
   :serial t
   :pathname "src"
   :components ((:file "package")
@@ -24,8 +28,7 @@
   :in-order-to ((test-op (test-op "doc-extract-protocol/tests"))))
 
 (defsystem "doc-extract-protocol/tests"
-  ;; compression-backend-chipz: zip reader for the DOCX / XLSX fixtures.
-  :depends-on ("doc-extract-protocol" "compression-backend-chipz" "rove")
+  :depends-on ("doc-extract-protocol" "rove")
   :pathname "tests"
   :serial t
   :components ((:file "package")

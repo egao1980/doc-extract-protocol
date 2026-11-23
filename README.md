@@ -1,6 +1,6 @@
 # doc-extract-protocol
 
-Lispy **CLOS** document extraction for [cl-stack](https://github.com/egao1980/cl-stack). Version **0.3** reads markdown through `markdown-protocol` and keeps inline spans. Version **0.2** added the canonical `extracted-document` block tree (`demiurge-doc/1`).
+Lispy **CLOS** document extraction for [cl-stack](https://github.com/egao1980/cl-stack). Version **0.4** reads DOCX and XLSX with `xml-protocol` (worksheets, tables, headings). Version **0.3** reads markdown through `markdown-protocol` and keeps inline spans. Version **0.2** added the canonical `extracted-document` block tree (`demiurge-doc/1`).
 
 | System | Role | Repo |
 |--------|------|------|
@@ -41,7 +41,22 @@ Every backend normalizes into a typed block tree (`schema-protocol` `defschema`)
 
 `(register-extractor backend &key formats priority)` / `(find-extractor format)`. Missing format signals `no-extractor-for-format` with restart `use-backend`. Colocated HTML and office backends self-register at load.
 
-HTML uses `html-protocol` when `*html-backend*` is bound; otherwise a tag-strip + heading heuristic. DOCX/XLSX use `compression-protocol` zip when loaded; otherwise pass unzipped XML as `:format :docx-xml` / `:xlsx-xml`. PDF is not implemented here.
+HTML uses `html-protocol` when `*html-backend*` is bound; otherwise a tag-strip + heading heuristic. PDF is not implemented here.
+
+## DOCX and XLSX
+
+Office Open XML packages (transitional and strict) are read with `compression-protocol` (zip, deflate by `compression-backend-chipz`) and parsed with `xml-protocol` (`xml-backend-native`). Both are dependencies, so `(asdf:load-system "doc-extract-protocol")` is enough. Parts are found through the package relationships (`_rels/.rels`, `*.rels`), so non-default part names work.
+
+| Format | `extract-document` | `extract-sections` | `extract-text` |
+|--------|--------------------|--------------------|----------------|
+| `:docx` | paragraphs as `text-block`s, `w:tbl` as `table-block`s (`w:gridSpan` → col-span, `w:vMerge` → row-span, `w:tblHeader` → header cells, nested tables kept), nested under a `section` per heading | one per heading, plus an untitled one for content before the first | one line per paragraph or table row, cells separated by Tab |
+| `:xlsx` | one `section` per sheet (title = sheet name, workbook order) holding a `table-block` cropped to the used range; merged cells set spans | one per sheet | rows as lines, cells separated by Tab; no sheet names |
+
+Headings come from `w:outlineLvl`, the paragraph style's level in `word/styles.xml` (built-in name `heading N`, so localized style ids map), or a `HeadingN` style id. Run text joins without separators; `w:tab` is a Tab, `w:br` a newline. Tracked deletions, field codes and `mc:AlternateContent` fallbacks are not text; insertions, hyperlinks and content controls are.
+
+Cells: shared strings by index (rich-text runs joined, phonetic runs dropped), inline strings, numbers as written in `<v>`, the cached value of a formula (never the formula), `TRUE` / `FALSE`, error values such as `#DIV/0!`. Dates and number formats are not applied yet: a date cell gives its serial number ([#7](https://github.com/egao1980/doc-extract-protocol/issues/7)).
+
+`:docx-xml` / `:xlsx-xml` take one unzipped part as a string, pathname or octets: `word/document.xml`, or a worksheet, `xl/sharedStrings.xml` or `xl/workbook.xml`. A lone worksheet cannot resolve shared strings. Malformed XML, a source that is not a zip and a package without its main part signal `doc-extract-error`.
 
 Conditions: `doc-extract-error`, `doc-extract-unsupported`, `no-extractor-for-format`. Restarts: `use-value`, `retry`, `use-backend`.
 
