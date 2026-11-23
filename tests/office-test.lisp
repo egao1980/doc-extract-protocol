@@ -372,3 +372,57 @@
     (ok (equal "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                (doc-extract-protocol:document-metadata-mimetype
                 (doc-extract-protocol:extracted-document-metadata doc))))))
+
+(defparameter *docx-text-box-xml*
+  (let ((box "<w:txbxContent><w:p><w:r><w:t>Box one</w:t></w:r></w:p><w:p><w:r><w:t>Box two</w:t></w:r></w:p></w:txbxContent>"))
+    (format nil "<?xml version=\"1.0\" encoding=\"UTF-8\"?><w:document xmlns:w=\"~a\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" xmlns:v=\"urn:schemas-microsoft-com:vml\"><w:body><w:p><w:r><w:t>Before</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires=\"wps\"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>~a</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>~a</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r><w:r><w:t>After</w:t></w:r></w:p></w:body></w:document>"
+            *w-ns* box box))
+  "A Word text box as Word writes it: DrawingML wps:txbx with a VML fallback,
+   inside a run of the anchoring paragraph; the box has its own w:p.")
+
+(deftest docx-text-box-paragraphs-stay-apart
+  "evidence (PR #8): the paragraphs of a text box (w:txbxContent) are read
+   as runs of the anchoring paragraph and glued: \"BeforeBox oneBox
+   twoAfter\". python-docx 1.2 leaves text boxes out of paragraph.text
+   (\"BeforeAfter\"); kept or dropped, words from different paragraphs must
+   not run together."
+  (let ((text (doc-extract-protocol:extract-text (%b) *docx-text-box-xml* :format :docx-xml)))
+    (ok (search "Before" text) text)
+    (ok (search "After" text) text)
+    (ng (search "BeforeBox" text) text)
+    (ng (search "oneBox" text) text)
+    (ng (search "twoAfter" text) text)))
+
+(deftest docx-ptab-is-a-tab
+  "evidence (PR #8): w:ptab (absolute position tab: right-aligned text in
+   headers, TOC leaders) is a Tab in python-docx 1.2's run.text (\"L\\tR\");
+   the PR drops it and glues the words (\"LR\")."
+  (ok (equal (format nil "L~CR" #\Tab)
+             (doc-extract-protocol:extract-text
+              (%b)
+              (%wdoc "<w:p><w:r><w:t>L</w:t><w:ptab w:relativeTo=\"margin\" w:alignment=\"right\" w:leader=\"none\"/><w:t>R</w:t></w:r></w:p>")
+              :format :docx-xml))))
+
+(deftest xlsx-sparse-far-cell-bounded-memory
+  "evidence (PR #8): a worksheet part of a few hundred bytes with values in
+   A1 and XFD1048576 (Excel's last cell) makes the sheet table 1048576 x
+   16384, and extract-text / extract-document allocate that dense grid
+   (137 GB requested: HEAP-EXHAUSTED-ERROR). Expected: both values in the
+   text, or a DOC-EXTRACT-ERROR refusing the sheet; never a storage
+   condition."
+  (let ((xml (format nil "<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"~a\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>first</t></is></c></row><row r=\"1048576\"><c r=\"XFD1048576\"><v>42</v></c></row></sheetData></worksheet>"
+                     *s-ns*)))
+    (flet ((outcome (fn)
+             (handler-case (funcall fn)
+               (doc-extract-protocol:doc-extract-error (e) e)
+               (storage-condition (e) (list :storage-condition (type-of e))))))
+      (let ((text (outcome (lambda ()
+                             (doc-extract-protocol:extract-text (%b) xml :format :xlsx-xml)))))
+        (ok (or (typep text 'doc-extract-protocol:doc-extract-error)
+                (and (stringp text) (search "first" text) (search "42" text)))
+            (format nil "extract-text: ~s" text)))
+      (let ((doc (outcome (lambda ()
+                            (doc-extract-protocol:extract-document (%b) xml :format :xlsx-xml)))))
+        (ok (or (typep doc 'doc-extract-protocol:doc-extract-error)
+                (typep doc 'doc-extract-protocol:extracted-document))
+            (format nil "extract-document: ~s" doc))))))
