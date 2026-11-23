@@ -101,6 +101,8 @@
         (format nil "runs \"Sales gr\" + \"ew\" + \" in both regions.\", got ~s" text))
     (ok (search "R&D grew too." text) (format nil "entity, got ~s" text))))
 
+;;; Edge cases (doc-extract-protocol#6 fix): hand-written parts and packages.
+
 (defparameter *w-ns* "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 (defparameter *s-ns* "http://schemas.openxmlformats.org/spreadsheetml/2006/main")
