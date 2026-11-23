@@ -508,13 +508,18 @@ gives its id, attributes and provenance."
   block)
 
 (defun %image-paragraph (inlines)
-  "→ (values alt url) for a paragraph that is exactly ![alt](url)."
-  (when (and (= 2 (length inlines))
-             (equal "!" (first inlines))
-             (consp (second inlines))
-             (eq :link (first (second inlines))))
-    (values (inlines-text-spans (third (second inlines)))
-            (second (second inlines)))))
+  "→ (values alt url) for a paragraph that is exactly ![alt](url): one
+(:image url alt) from markdown-protocol 0.2.0 on, or \"!\" + (:link url alt)
+from 0.1.0, which had no images."
+  (let ((x (first inlines)))
+    (cond ((and (= 1 (length inlines)) (consp x) (eq :image (first x)))
+           (values (inlines-text-spans (third x)) (second x)))
+          ((and (= 2 (length inlines))
+                (equal "!" x)
+                (consp (second inlines))
+                (eq :link (first (second inlines))))
+           (values (inlines-text-spans (third (second inlines)))
+                   (second (second inlines)))))))
 
 (defun %kv-paragraph (inlines)
   "→ (values key value) for a one-line paragraph **key**: value."
