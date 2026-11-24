@@ -414,6 +414,56 @@
            (lambda ()
              (doc-extract-protocol:extract-text (%b) (%damaged-docx :size) :format :docx)))))
 
+(deftest office-random-damage-signals-doc-extract-error
+  "Random damage to the python-docx, openpyxl and Excel fixtures, both to the
+   zip bytes and to the XML of a main part (:docx-xml / :xlsx-xml), extracts
+   or signals DOC-EXTRACT-ERROR: never another condition. A fixed LCG; 1500
+   documents."
+  (let ((seed 11)
+        (other '())
+        (extracted 0)
+        (signalled 0)
+        (alphabet "<>/=\"'&#;:x0129AFwtcrpv- "))
+    (labels ((random* (n)
+               (setf seed (mod (+ (* seed 1103515245) 12345) #x80000000))
+               (mod (ash seed -8) n))
+             (try (label format source)
+               (handler-case
+                   (handler-bind ((warning #'muffle-warning))
+                     (doc-extract-protocol:extract-text (%b) source :format format)
+                     (incf extracted))
+                 (doc-extract-protocol:doc-extract-error () (incf signalled))
+                 (error (e) (push (list label (type-of e) (princ-to-string e)) other))))
+             (octets (name)
+               (with-open-file (in (%office-fixture name) :element-type '(unsigned-byte 8))
+                 (let ((v (make-array (file-length in) :element-type '(unsigned-byte 8))))
+                   (read-sequence v in)
+                   v))))
+      (dolist (fixture '(("python-docx-report.docx" :docx 150 "word/document.xml" :docx-xml)
+                         ("openpyxl-report.xlsx" :xlsx 300 "xl/worksheets/sheet1.xml" :xlsx-xml)
+                         ("excel-report.xlsx" :xlsx 300 "xl/sharedStrings.xml" :xlsx-xml)))
+        (destructuring-bind (file format zip-cases part part-format) fixture
+          (let* ((zip (octets file))
+                 (text (doc-extract-protocol:decode-source-octets
+                        (compression-protocol:read-entry
+                         (compression-protocol:open-archive zip :format :zip) part)
+                        :encoding nil)))
+            (dotimes (i zip-cases)
+              (let ((z (copy-seq zip)))
+                (if (zerop (random* 6))
+                    (setf z (subseq z 0 (random* (length z))))
+                    (dotimes (k (1+ (random* 3)))
+                      (setf (aref z (random* (length z))) (random* 256))))
+                (try (list file :zip i) format z)))
+            (dotimes (i 250)
+              (let ((x (copy-seq text)))
+                (dotimes (k (1+ (random* 3)))
+                  (setf (char x (random* (length x)))
+                        (char alphabet (random* (length alphabet)))))
+                (try (list part :xml i) part-format x)))))))
+    (ok (null other) (format nil "~d extracted, ~d DOC-EXTRACT-ERROR, ~d other~@[, first: ~s~]"
+                             extracted signalled (length other) (car (last other))))))
+
 (deftest office-through-registry
   "extract-document with no backend finds the default one for :xlsx / :docx."
   (let ((doc (doc-extract-protocol:extract-document

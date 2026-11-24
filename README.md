@@ -58,7 +58,7 @@ Cells: shared strings by index (rich-text runs joined, phonetic runs dropped), i
 
 Tables are bounded by `*max-table-cells*` (default 4,000,000 rows × columns), because the block model and its renderers hold a table as a full grid. A larger table (a sheet with a stray value in `XFD1048576`, a huge `w:gridSpan`) keeps only the rows and columns in which a cell starts, so positions are no longer the sheet's; spans and merged regions count the kept ones. If that is still too large, `doc-extract-error`, with a `continue` restart that leaves the table out.
 
-`:docx-xml` / `:xlsx-xml` take one unzipped part as a string, pathname or octets: `word/document.xml`, or a worksheet, `xl/sharedStrings.xml` or `xl/workbook.xml`. A lone worksheet cannot resolve shared strings. Malformed XML, a source that is not a zip and a package without its main part signal `doc-extract-error`.
+`:docx-xml` / `:xlsx-xml` take one unzipped part as a string, pathname or octets: `word/document.xml`, or a worksheet, `xl/sharedStrings.xml` or `xl/workbook.xml`. A lone worksheet cannot resolve shared strings. Damaged input signals `doc-extract-error`, where python-docx / openpyxl raise `XMLSyntaxError`, `BadZipFile` or `zlib.error`. This covers malformed XML (a character reference that is not an XML character too), a source that is not a zip, a package without its main part, and a part whose deflate data, size or CRC-32 is damaged or that runs past the end of the file. `doc-extract-error-cause` holds the xml-protocol or compression-protocol condition underneath.
 
 Conditions: `doc-extract-error`, `doc-extract-unsupported`, `no-extractor-for-format`. Restarts: `use-value`, `retry`, `use-backend`; `continue` for a table over `*max-table-cells*`.
 

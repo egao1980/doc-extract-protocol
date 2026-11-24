@@ -90,7 +90,8 @@
                 (stack-xml:xml-error (e)
                   (error 'doc-extract-error
                          :format format
-                         :message (format nil "~a: ~a" part e))))))
+                         :message (format nil "~a: ~a" part e)
+                         :cause e)))))
     (or root
         (error 'doc-extract-error
                :format format
@@ -106,22 +107,33 @@
                      (error 'doc-extract-error
                             :format format
                             :message (format nil "not a ~(~a~) package (zip): ~a"
-                                             format e))))))
+                                             format e)
+                            :cause e)))))
     (unwind-protect (funcall fn archive)
       (compression-protocol:close-archive archive))))
 
-(defun %package-part (archive name)
-  "Decoded text of the part NAME (OPC part names ignore case), or NIL."
+(defun %package-part (archive name &optional format)
+  "Decoded text of the part NAME (OPC part names ignore case), or NIL. A part
+   the archive cannot read (damaged deflate data, a size or CRC-32 that does
+   not match its header, data past the end of the file) signals
+   DOC-EXTRACT-ERROR naming the part, as python-docx / openpyxl raise
+   zlib.error or BadZipFile."
   (let ((entry (find name (compression-protocol:archive-entries archive)
                      :key #'compression-protocol:archive-entry-name
                      :test #'string-equal)))
     (when (and entry (not (compression-protocol:archive-entry-directory-p entry)))
-      (decode-source-octets (compression-protocol:read-entry archive entry)
-                            :encoding nil))))
+      (decode-source-octets
+       (handler-case (compression-protocol:read-entry archive entry)
+         (compression-protocol:compression-error (e)
+           (error 'doc-extract-error
+                  :format format
+                  :message (format nil "damaged package part ~a: ~a" name e)
+                  :cause e)))
+       :encoding nil))))
 
 (defun %package-part-root (archive name format)
   "Root element of the part NAME, or NIL when the package has no such part."
-  (let ((text (%package-part archive name)))
+  (let ((text (%package-part archive name format)))
     (and text (%office-xml-root text name format))))
 
 (defun %part-directory (part)

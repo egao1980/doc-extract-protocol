@@ -4,6 +4,7 @@
   (:export #:doc-extract-error
            #:doc-extract-error-message
            #:doc-extract-error-format
+           #:doc-extract-error-cause
            #:doc-extract-unsupported
            #:no-extractor-for-format
            #:no-extractor-for-format-format

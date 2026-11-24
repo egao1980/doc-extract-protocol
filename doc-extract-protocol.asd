@@ -8,8 +8,11 @@
                "crypto-protocol" "crypto-backend-ironclad"
                ;; DOCX / XLSX: zip parts read with compression-protocol (deflate by
                ;; the chipz backend), parsed with xml-protocol (native backend).
-               (:version "compression-protocol" "0.4.0") "compression-backend-chipz"
-               (:version "xml-protocol" "0.1.0") "xml-backend-native")
+               ;; Damaged input signals their own conditions (compression-error,
+               ;; xml-error) from these versions on; office.lisp wraps them.
+               (:version "compression-protocol" "0.5.0")
+               (:version "compression-backend-chipz" "0.3.0")
+               (:version "xml-protocol" "0.1.0") (:version "xml-backend-native" "0.1.1"))
   :serial t
   :pathname "src"
   :components ((:file "package")
