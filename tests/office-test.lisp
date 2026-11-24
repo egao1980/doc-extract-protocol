@@ -464,6 +464,48 @@
     (ok (null other) (format nil "~d extracted, ~d DOC-EXTRACT-ERROR, ~d other~@[, first: ~s~]"
                              extracted signalled (length other) (car (last other))))))
 
+(deftest office-package-with-a-stored-embedded-package
+  "evidence (PR #8, round 3): a valid package that holds a zip-based part
+   stored uncompressed (a chart's word/embeddings/Microsoft_Excel_Worksheet.xlsx
+   after a script re-zips the file with zipfile's default ZIP_STORED) is
+   rejected as \"not a docx package\". compression-protocol's %FIND-EOCD
+   scans the last 64 KiB forward and takes the embedded workbook's
+   end-of-central-directory record for the package's own; Python's zipfile
+   (_EndRecData) takes the last one, and python-docx / openpyxl read these
+   files: ['Quarterly report', 'Sales grew in both regions.', 'R&D grew
+   too.'] and [['region', 'q1', 'q2'], ['North', 120, 135], ['South', 98,
+   110]]."
+  (flet ((octets (name)
+           (with-open-file (in (%office-fixture name) :element-type '(unsigned-byte 8))
+             (let ((v (make-array (file-length in) :element-type '(unsigned-byte 8))))
+               (read-sequence v in)
+               v)))
+         (stored-copy (name extra-name extra)
+           (let ((archive (compression-protocol:open-archive (%office-fixture name) :format :zip)))
+             (apply #'%zip
+                    (append (loop for e in (compression-protocol:archive-entries archive)
+                                  unless (compression-protocol:archive-entry-directory-p e)
+                                    append (list (compression-protocol:archive-entry-name e)
+                                                 (compression-protocol:read-entry archive e)))
+                            (list extra-name extra)))))
+         (text (source format)
+           (handler-case (doc-extract-protocol:extract-text (%b) source :format format)
+             (error (e) (format nil "~s: ~a" (type-of e) e)))))
+    (let ((docx (stored-copy "python-docx-report.docx"
+                             "word/embeddings/Microsoft_Excel_Worksheet.xlsx"
+                             (octets "openpyxl-report.xlsx")))
+          (xlsx (stored-copy "openpyxl-report.xlsx"
+                             "xl/embeddings/Microsoft_Word_Document.docx"
+                             (octets "python-docx-report.docx"))))
+      (let ((expected (%office-text "python-docx-report.docx" :docx))
+            (got (text docx :docx)))
+        (ok (equal expected got)
+            (format nil "docx with a stored embedded workbook: ~s" got)))
+      (let ((expected (%office-text "openpyxl-report.xlsx" :xlsx))
+            (got (text xlsx :xlsx)))
+        (ok (equal expected got)
+            (format nil "xlsx with a stored embedded document: ~s" got))))))
+
 (deftest office-through-registry
   "extract-document with no backend finds the default one for :xlsx / :docx."
   (let ((doc (doc-extract-protocol:extract-document
