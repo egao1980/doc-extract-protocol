@@ -362,6 +362,58 @@
         'doc-extract-protocol:doc-extract-error)
       "package without a workbook"))
 
+(defun %damaged-docx (how)
+  "tests/fixtures/python-docx-report.docx with word/document.xml damaged.
+   HOW :deflate overwrites 50 bytes of its deflate data with #xFF; :size
+   sets its compressed size in the central directory past the end of the
+   file."
+  (let* ((octets (with-open-file (in (%office-fixture "python-docx-report.docx")
+                                     :element-type '(unsigned-byte 8))
+                   (let ((v (make-array (file-length in) :element-type '(unsigned-byte 8))))
+                     (read-sequence v in)
+                     v)))
+         (name (map '(vector (unsigned-byte 8)) #'char-code "word/document.xml"))
+         (local (- (search name octets) 30))
+         (central (- (search name octets :start2 (+ local 30 (length name))) 46)))
+    (ecase how
+      (:deflate
+       (let ((data (+ local 30 (length name)
+                      (aref octets (+ local 28)) (* 256 (aref octets (+ local 29))))))
+         (fill octets #xff :start (+ data 10) :end (+ data 60))))
+      (:size
+       (replace octets #(#xff #xff #xff #x7f) :start1 (+ central 20))))
+    octets))
+
+(deftest office-damaged-input-signals-doc-extract-error
+  "evidence (PR #8, round 2): the README says malformed XML and a source
+   that is not a zip signal DOC-EXTRACT-ERROR, so a caller can handle a bad
+   upload with one HANDLER-CASE. These inputs leak other conditions:
+     &#x110000; (a character reference past #x10FFFF; lxml / python-docx:
+       XMLSyntaxError) => TYPE-ERROR from CODE-CHAR in xml-backend-native;
+     a docx whose word/document.xml has corrupt deflate data (python-docx:
+       zlib.error) => CHIPZ::CODE-LENGTHS-BOUNDS-ERROR, a chipz internal;
+     a central-directory size past the end of the file (python-docx:
+       BadZipFile) => a SUBSEQ bounds error."
+  (flet ((check (label thunk)
+           (let ((e (handler-case (progn (funcall thunk) nil)
+                      (error (e) e))))
+             (ok (typep e 'doc-extract-protocol:doc-extract-error)
+                 (format nil "~a: ~s~@[ ~a~]" label (type-of e) e)))))
+    (check "character reference past #x10FFFF"
+           (lambda ()
+             (doc-extract-protocol:extract-text (%b) (%wdoc (%wp "a&#x110000;b"))
+                                                :format :docx-xml)))
+    (check "character reference that is a bignum"
+           (lambda ()
+             (doc-extract-protocol:extract-text (%b) (%wdoc (%wp "a&#99999999999999999999;b"))
+                                                :format :docx-xml)))
+    (check "corrupt deflate data in word/document.xml"
+           (lambda ()
+             (doc-extract-protocol:extract-text (%b) (%damaged-docx :deflate) :format :docx)))
+    (check "compressed size past the end of the file"
+           (lambda ()
+             (doc-extract-protocol:extract-text (%b) (%damaged-docx :size) :format :docx)))))
+
 (deftest office-through-registry
   "extract-document with no backend finds the default one for :xlsx / :docx."
   (let ((doc (doc-extract-protocol:extract-document
