@@ -52,13 +52,15 @@ Office Open XML packages (transitional and strict) are read with `compression-pr
 | `:docx` | paragraphs as `text-block`s, `w:tbl` as `table-block`s (`w:gridSpan` → col-span, `w:vMerge` → row-span, `w:tblHeader` → header cells, nested tables kept), nested under a `section` per heading | one per heading, plus an untitled one for content before the first | one line per paragraph or table row, cells separated by Tab |
 | `:xlsx` | one `section` per sheet (title = sheet name, workbook order) holding a `table-block` cropped to the used range; merged cells set spans | one per sheet | rows as lines, cells separated by Tab; no sheet names |
 
-Headings come from `w:outlineLvl`, the paragraph style's level in `word/styles.xml` (built-in name `heading N`, so localized style ids map), or a `HeadingN` style id. Run text joins without separators; `w:tab` is a Tab, `w:br` a newline. Tracked deletions, field codes and `mc:AlternateContent` fallbacks are not text; insertions, hyperlinks and content controls are.
+Headings come from `w:outlineLvl`, the paragraph style's level in `word/styles.xml` (built-in name `heading N`, so localized style ids map), or a `HeadingN` style id. Run text joins without separators; `w:tab` and `w:ptab` are a Tab, `w:br` a newline. A text box (`w:txbxContent`, DrawingML or VML) is not run text: its paragraphs become blocks right after the paragraph that anchors it (python-docx leaves text boxes out of `paragraph.text`). Tracked deletions, field codes and `mc:AlternateContent` fallbacks are not text; insertions, hyperlinks and content controls are.
 
 Cells: shared strings by index (rich-text runs joined, phonetic runs dropped), inline strings, numbers as written in `<v>`, the cached value of a formula (never the formula), `TRUE` / `FALSE`, error values such as `#DIV/0!`. Dates and number formats are not applied yet: a date cell gives its serial number ([#7](https://github.com/egao1980/doc-extract-protocol/issues/7)).
 
+Tables are bounded by `*max-table-cells*` (default 4,000,000 rows × columns), because the block model and its renderers hold a table as a full grid. A larger table (a sheet with a stray value in `XFD1048576`, a huge `w:gridSpan`) keeps only the rows and columns in which a cell starts, so positions are no longer the sheet's; spans and merged regions count the kept ones. If that is still too large, `doc-extract-error`, with a `continue` restart that leaves the table out.
+
 `:docx-xml` / `:xlsx-xml` take one unzipped part as a string, pathname or octets: `word/document.xml`, or a worksheet, `xl/sharedStrings.xml` or `xl/workbook.xml`. A lone worksheet cannot resolve shared strings. Malformed XML, a source that is not a zip and a package without its main part signal `doc-extract-error`.
 
-Conditions: `doc-extract-error`, `doc-extract-unsupported`, `no-extractor-for-format`. Restarts: `use-value`, `retry`, `use-backend`.
+Conditions: `doc-extract-error`, `doc-extract-unsupported`, `no-extractor-for-format`. Restarts: `use-value`, `retry`, `use-backend`; `continue` for a table over `*max-table-cells*`.
 
 ## License
 

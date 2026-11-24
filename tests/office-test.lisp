@@ -426,3 +426,129 @@
         (ok (or (typep doc 'doc-extract-protocol:doc-extract-error)
                 (typep doc 'doc-extract-protocol:extracted-document))
             (format nil "extract-document: ~s" doc))))))
+
+(defun %block-texts (doc)
+  "Plain text of each text block of DOC, in reading order."
+  (let ((texts '()))
+    (labels ((walk (blocks)
+               (dolist (b blocks)
+                 (when (typep b 'doc-extract-protocol:text-block)
+                   (push (doc-extract-protocol:block-plain-text b) texts))
+                 (walk (doc-extract-protocol:block-children b)))))
+      (walk (doc-extract-protocol:extracted-document-blocks doc)))
+    (nreverse texts)))
+
+(defun %vml-doc (body)
+  "A w:document whose BODY may use the VML (v:) namespace."
+  (format nil "<?xml version=\"1.0\" encoding=\"UTF-8\"?><w:document xmlns:w=\"~a\" xmlns:v=\"urn:schemas-microsoft-com:vml\"><w:body>~a</w:body></w:document>"
+          *w-ns* body))
+
+(defun %vml-box (&rest paragraphs)
+  "A run holding a VML text box (no mc:AlternateContent, as older Word
+   writes it) with one w:p per PARAGRAPHS."
+  (format nil "<w:r><w:pict><v:shape><v:textbox><w:txbxContent>~{<w:p><w:r><w:t>~a</w:t></w:r></w:p>~}</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"
+          paragraphs))
+
+(deftest docx-text-boxes-are-blocks-after-their-anchor
+  (let ((doc (doc-extract-protocol:extract-document (%b) *docx-text-box-xml* :format :docx-xml)))
+    (ok (equal '("BeforeAfter" "Box one" "Box two") (%block-texts doc))
+        "DrawingML box (its VML fallback not repeated): blocks after the anchor")
+    (ok (equal (format nil "BeforeAfter~%Box one~%Box two")
+               (doc-extract-protocol:extract-text (%b) *docx-text-box-xml* :format :docx-xml))))
+  (flet ((texts (body)
+           (%block-texts (doc-extract-protocol:extract-document (%b) (%vml-doc body)
+                                                                :format :docx-xml))))
+    (ok (equal '("AB" "V1" "V2")
+               (texts (format nil "<w:p><w:r><w:t>A</w:t></w:r>~a<w:r><w:t>B</w:t></w:r></w:p>"
+                              (%vml-box "V1" "V2"))))
+        "VML-only box")
+    (ok (equal '("Only") (texts (format nil "<w:p>~a</w:p>" (%vml-box "Only"))))
+        "a box anchored in an empty paragraph")
+    (ok (equal '("Outer" "Inner")
+               (texts (format nil "<w:p>~a</w:p>"
+                              (format nil "<w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>Outer</w:t></w:r>~a</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"
+                                      (%vml-box "Inner")))))
+        "a box inside a box"))
+  (let* ((doc (doc-extract-protocol:extract-document
+               (%b)
+               (%vml-doc (format nil "<w:p><w:pPr><w:outlineLvl w:val=\"0\"/></w:pPr><w:r><w:t>Title</w:t></w:r>~a</w:p><w:tbl><w:tr>~a</w:tr></w:tbl>"
+                                 (%vml-box "Aside")
+                                 (%wtc (format nil "<w:p><w:r><w:t>Cell</w:t></w:r>~a</w:p>"
+                                               (%vml-box "Boxed")))))
+               :format :docx-xml))
+         (section (first (doc-extract-protocol:extracted-document-blocks doc))))
+    (ok (and (typep section 'doc-extract-protocol:section)
+             (equal "Title" (doc-extract-protocol:section-title section))
+             (equal "Aside" (doc-extract-protocol:block-plain-text
+                             (first (doc-extract-protocol:section-children section)))))
+        "a heading's box is body text in its section, not a heading")
+    (ok (equal "Cell Boxed" (%cell-text (first (%table-blocks doc)) 0 0))
+        "a box in a table cell stays in the cell")))
+
+(deftest docx-ptab-in-the-block-model
+  (let ((doc (doc-extract-protocol:extract-document
+              (%b)
+              (%wdoc "<w:p><w:r><w:t>Name</w:t><w:ptab w:relativeTo=\"margin\" w:alignment=\"right\" w:leader=\"dot\"/><w:t>7</w:t></w:r></w:p>")
+              :format :docx-xml)))
+    (ok (equal (list (format nil "Name~C7" #\Tab)) (%block-texts doc)) "a TOC line")))
+
+(defun %sheet-xml (cells &optional (merges '()))
+  "A worksheet part with CELLS ((ref text) …) as inline strings and MERGES
+   (\"A1:B2\" …)."
+  (format nil "<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"~a\"><sheetData><row>~{~{<c r=\"~a\" t=\"inlineStr\"><is><t>~a</t></is></c>~}~}</row></sheetData>~@[<mergeCells>~{<mergeCell ref=\"~a\"/>~}</mergeCells>~]</worksheet>"
+          *s-ns* cells merges))
+
+(deftest office-tables-within-max-table-cells
+  (let* ((xml (format nil "<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"~a\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>first</t></is></c></row><row r=\"1048576\"><c r=\"XFD1048576\"><v>42</v></c></row></sheetData></worksheet>"
+                      *s-ns*))
+         (table (first (%table-blocks (doc-extract-protocol:extract-document (%b) xml :format :xlsx-xml)))))
+    (ok (equal (format nil "first~%~C42" #\Tab)
+               (doc-extract-protocol:extract-text (%b) xml :format :xlsx-xml))
+        "A1 and XFD1048576: empty rows and columns dropped")
+    (ok (and table
+             (= 2 (doc-extract-protocol:table-block-rows table))
+             (= 2 (doc-extract-protocol:table-block-cols table))
+             (equal "first" (%cell-text table 0 0))
+             (equal "42" (%cell-text table 1 1)))
+        "a 2 x 2 table"))
+  (let ((doc-extract-protocol:*max-table-cells* 6))
+    (let* ((xml (%sheet-xml '(("A1" "a") ("C1" "c") ("A100" "z")) '("C1:E1" "B5:B6")))
+           (table (first (%table-blocks
+                          (doc-extract-protocol:extract-document (%b) xml :format :xlsx-xml))))
+           (merged (doc-extract-protocol:table-block-merged table)))
+      (ok (and (= 2 (doc-extract-protocol:table-block-rows table))
+               (= 2 (doc-extract-protocol:table-block-cols table))
+               (equal "c" (%cell-text table 0 1))
+               (equal "z" (%cell-text table 1 0)))
+          "100 x 3 compacted to 2 x 2, order kept")
+      (ok (and (= 1 (length merged))
+               (equal '(0 1 1 1)
+                      (let ((m (first merged)))
+                        (list (doc-extract-protocol:merged-region-row m)
+                              (doc-extract-protocol:merged-region-col m)
+                              (doc-extract-protocol:merged-region-row-span m)
+                              (doc-extract-protocol:merged-region-col-span m))))
+               (= 1 (doc-extract-protocol:table-cell-col-span (%find-cell table 0 1))))
+          "spans count kept columns; a merge over dropped ones only is dropped"))
+    (let ((dense (%sheet-xml '(("A1" "1") ("B1" "2") ("C1" "3")
+                               ("A2" "4") ("B2" "5") ("C2" "6") ("A3" "7")))))
+      (ok (signals (doc-extract-protocol:extract-text (%b) dense :format :xlsx-xml)
+            'doc-extract-protocol:doc-extract-error)
+          "a dense 3 x 3 sheet over the limit")
+      (ok (equal ""
+                 (handler-bind ((doc-extract-protocol:doc-extract-error
+                                 (lambda (c) (declare (ignore c)) (invoke-restart 'continue))))
+                   (doc-extract-protocol:extract-text (%b) dense :format :xlsx-xml)))
+          "CONTINUE leaves the table out")))
+  (let ((xml (%wdoc (format nil "<w:tbl><w:tr>~a~a</w:tr><w:tr>~a</w:tr></w:tbl>"
+                            (%wtc (%wp "X") "<w:tcPr><w:gridSpan w:val=\"100000000\"/></w:tcPr>")
+                            (%wtc (%wp "Y"))
+                            (%wtc (%wp "Z"))))))
+    (ok (equal (format nil "X~CY~%Z" #\Tab)
+               (doc-extract-protocol:extract-text (%b) xml :format :docx-xml))
+        "w:gridSpan 100000000")
+    (let ((table (first (%table-blocks
+                         (doc-extract-protocol:extract-document (%b) xml :format :docx-xml)))))
+      (ok (and (= 2 (doc-extract-protocol:table-block-cols table))
+               (= 1 (doc-extract-protocol:table-cell-col-span (%find-cell table 0 0))))
+          "2 columns, the span covers one"))))

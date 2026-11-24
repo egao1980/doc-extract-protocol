@@ -192,27 +192,35 @@
 
 (defun %office-table-text (table)
   "TABLE as lines of Tab-separated cells (see %OFFICE-CELL-TEXT); empty
-   rows and trailing empty cells are left out."
-  (let* ((rows (or (table-block-rows table) 0))
-         (cols (or (table-block-cols table) 0))
-         (grid (make-array (list rows cols) :initial-element "")))
+   rows and trailing empty cells are left out. Only the cells are visited,
+   never the whole rows × cols grid; of two cells at one position the last
+   wins."
+  (let ((rows (or (table-block-rows table) 0))
+        (cols (or (table-block-cols table) 0))
+        (by-row (make-hash-table)))
     (dolist (cell (or (table-block-cells table) '()))
       (let ((r (table-cell-row cell))
             (c (table-cell-col cell)))
         (when (and (< -1 r rows) (< -1 c cols))
-          (setf (aref grid r c) (%office-cell-text cell)))))
+          (push (cons c (%office-cell-text cell)) (gethash r by-row)))))
     (with-output-to-string (s)
       (let ((first t))
-        (dotimes (r rows)
-          (let ((last (loop for c from (1- cols) downto 0
-                            when (plusp (length (aref grid r c)))
-                              return c)))
-            (when last
+        (dolist (r (sort (loop for r being the hash-keys of by-row collect r) #'<))
+          ;; Newest first, so after a stable sort the first of each column wins.
+          (let ((line (loop with previous = nil
+                            for (c . text) in (stable-sort (gethash r by-row) #'< :key #'car)
+                            unless (eql c previous)
+                              when (plusp (length text))
+                                collect (cons c text)
+                            do (setf previous c))))
+            (when line
               (unless first (terpri s))
               (setf first nil)
-              (loop for c from 0 to last
-                    do (when (plusp c) (write-char #\Tab s))
-                       (write-string (aref grid r c) s)))))))))
+              (let ((col 0))
+                (loop for (c . text) in line
+                      do (loop repeat (- c col) do (write-char #\Tab s))
+                         (setf col c)
+                         (write-string text s))))))))))
 
 (defun %office-blocks-text (blocks &key (titles t))
   "Reading-order text of BLOCKS, one line per paragraph or table row;
@@ -293,6 +301,80 @@
                :mimetype (cdr (assoc (%office-base-format format) +office-mimetypes+)))
     :blocks blocks)))
 
+(defvar *max-table-cells* 4000000
+  "Largest rows × columns of a table the DOCX and XLSX readers build. A
+   larger one (a sheet with a stray value far from the rest, a huge
+   w:gridSpan) keeps only the rows and the columns in which a cell starts;
+   when that is still larger, DOC-EXTRACT-ERROR with a CONTINUE restart that
+   leaves the table out. The block model and its renderers hold a table as
+   a rows × columns grid, so this bounds their memory.")
+
+(defun %sorted-unique (integers)
+  "INTEGERS sorted ascending without duplicates, as a vector."
+  (let ((sorted (sort (copy-list integers) #'<))
+        (out '()))
+    (dolist (n sorted)
+      (unless (and out (= n (first out)))
+        (push n out)))
+    (coerce (nreverse out) 'simple-vector)))
+
+(defun %lower-bound (keys value)
+  "Index of the first element of the ascending vector KEYS that is >= VALUE."
+  (let ((lo 0)
+        (hi (length keys)))
+    (loop while (< lo hi)
+          do (let ((mid (floor (+ lo hi) 2)))
+               (if (< (svref keys mid) value)
+                   (setf lo (1+ mid))
+                   (setf hi mid))))
+    lo))
+
+(defun %compact-table (cells merged)
+  "CELLS and MERGED regions reduced to the rows and columns in which a cell
+   starts: each position becomes its index among those, each span the number
+   of them it covers. Merged regions that cover none are dropped.
+   → (values rows cols cells merged)."
+  (let ((row-keys (%sorted-unique (mapcar #'table-cell-row cells)))
+        (col-keys (%sorted-unique (mapcar #'table-cell-col cells))))
+    (flet ((covered (keys start span)
+             (- (%lower-bound keys (+ start span)) (%lower-bound keys start))))
+      (dolist (cell cells)
+        (let ((r (table-cell-row cell))
+              (c (table-cell-col cell)))
+          (setf (table-cell-row-span cell) (max 1 (covered row-keys r (table-cell-row-span cell)))
+                (table-cell-col-span cell) (max 1 (covered col-keys c (table-cell-col-span cell)))
+                (table-cell-row cell) (%lower-bound row-keys r)
+                (table-cell-col cell) (%lower-bound col-keys c))))
+      (values (length row-keys) (length col-keys) cells
+              (loop for m in merged
+                    for r = (merged-region-row m)
+                    for c = (merged-region-col m)
+                    for row-span = (covered row-keys r (merged-region-row-span m))
+                    for col-span = (covered col-keys c (merged-region-col-span m))
+                    when (and (plusp row-span) (plusp col-span))
+                      collect (make-instance 'merged-region
+                                             :row (%lower-bound row-keys r)
+                                             :col (%lower-bound col-keys c)
+                                             :row-span row-span :col-span col-span))))))
+
+(defun %office-table-block (rows cols cells merged format)
+  "TABLE-BLOCK of ROWS × COLS holding CELLS and MERGED regions, within
+   *MAX-TABLE-CELLS* (see there); NIL when the CONTINUE restart leaves it
+   out."
+  (when (> (* rows cols) *max-table-cells*)
+    (let ((size (list rows cols)))
+      (multiple-value-setq (rows cols cells merged) (%compact-table cells merged))
+      (when (> (* rows cols) *max-table-cells*)
+        (restart-case
+            (error 'doc-extract-error
+                   :format format
+                   :message (format nil "a ~{~d × ~d~} table (~d × ~d without its empty rows and columns) is larger than *max-table-cells* (~d)"
+                                    size rows cols *max-table-cells*))
+          (continue ()
+            :report "Leave the table out."
+            (return-from %office-table-block nil))))))
+  (make-table-block :rows rows :cols cols :cells cells :merged merged))
+
 ;;; DOCX (WordprocessingML)
 
 (defun %wml-p (node &optional local-name)
@@ -315,30 +397,40 @@
   "Run content that is not document text: properties, deleted or
    moved-away text, field instructions.")
 
-(defun %wml-inline-text (element stream)
-  "Write the text of ELEMENT's runs to STREAM: w:t as is, w:tab as Tab,
-   w:br / w:cr as Newline, w:noBreakHyphen as -. Of an mc:AlternateContent
-   only the first choice is read (the fallback repeats it)."
+(defun %wml-inline-text (element stream on-text-box)
+  "Write the text of ELEMENT's runs to STREAM: w:t as is, w:tab and w:ptab
+   as Tab, w:br / w:cr as Newline, w:noBreakHyphen as -. Of an
+   mc:AlternateContent only the first choice is read (the fallback repeats
+   it). A text box (w:txbxContent, in a DrawingML wps:txbx or a VML
+   v:textbox) holds paragraphs of its own, so it is not run text: it goes to
+   the function ON-TEXT-BOX instead."
   (dolist (node (stack-xml:xml-element-children element))
     (when (stack-xml:xml-element-p node)
       (let ((name (stack-xml:xml-element-local-name node)))
         (cond
-          ((equal +markup-compatibility-namespace+
-                  (stack-xml:xml-element-namespace-uri node))
-           (when (string= name "AlternateContent")
-             (let ((choice (find-if #'stack-xml:xml-element-p
-                                    (stack-xml:xml-element-children node))))
-               (when choice (%wml-inline-text choice stream)))))
-          ((not (%wml-p node)) (%wml-inline-text node stream))
-          ((string= name "t") (write-string (stack-xml:xml-element-text node) stream))
-          ((string= name "tab") (write-char #\Tab stream))
-          ((or (string= name "br") (string= name "cr")) (write-char #\Newline stream))
-          ((string= name "noBreakHyphen") (write-char #\- stream))
-          ((member name +wml-skipped-inline+ :test #'string=))
-          (t (%wml-inline-text node stream)))))))
+         ((equal +markup-compatibility-namespace+
+                 (stack-xml:xml-element-namespace-uri node))
+          (when (string= name "AlternateContent")
+            (let ((choice (find-if #'stack-xml:xml-element-p
+                                   (stack-xml:xml-element-children node))))
+              (when choice (%wml-inline-text choice stream on-text-box)))))
+         ((not (%wml-p node)) (%wml-inline-text node stream on-text-box))
+         ((string= name "t") (write-string (stack-xml:xml-element-text node) stream))
+         ((or (string= name "tab") (string= name "ptab")) (write-char #\Tab stream))
+         ((or (string= name "br") (string= name "cr")) (write-char #\Newline stream))
+         ((string= name "noBreakHyphen") (write-char #\- stream))
+         ((string= name "txbxContent") (funcall on-text-box node))
+         ((member name +wml-skipped-inline+ :test #'string=))
+         (t (%wml-inline-text node stream on-text-box)))))))
 
 (defun %wml-paragraph-text (p)
-  (%trim-ws (with-output-to-string (s) (%wml-inline-text p s))))
+  "→ (values text text-boxes): the text of the paragraph P, and the
+   w:txbxContent elements of its text boxes in document order, which are
+   not part of that text."
+  (let ((boxes '()))
+    (values (%trim-ws (with-output-to-string (s)
+                        (%wml-inline-text p s (lambda (box) (push box boxes)))))
+            (nreverse boxes))))
 
 (defun %outline-level (value)
   "w:outlineLvl 0..8 => heading level 1..9 (9 is body text)."
@@ -381,35 +473,40 @@
   "Block-level elements with no document text.")
 
 (defun %wml-flow (container style-levels &key (headings t))
-  "Blocks of a w:body, w:tc, w:sdtContent …, in order: text blocks for
-   paragraphs, table blocks for w:tbl, and (:heading LEVEL TITLE) for
-   heading paragraphs when HEADINGS. Content controls, custom XML and
-   tracked insertions are read through."
+  "Blocks of a w:body, w:tc, w:sdtContent, w:txbxContent …, in order: text
+   blocks for paragraphs, table blocks for w:tbl, and (:heading LEVEL TITLE)
+   for heading paragraphs when HEADINGS. The paragraphs of a text box follow
+   the paragraph that anchors it (never as headings). Content controls,
+   custom XML and tracked insertions are read through."
   (let ((items '()))
     (labels ((walk (parent)
                (dolist (node (stack-xml:xml-element-children parent))
                  (when (stack-xml:xml-element-p node)
                    (let ((name (stack-xml:xml-element-local-name node)))
                      (cond
-                       ((%wml-p node "p")
-                        (let ((text (%wml-paragraph-text node))
-                              (level (and headings (%wml-heading-level node style-levels))))
-                          (when (plusp (length text))
-                            (push (if level
-                                      (list :heading level text)
-                                      (make-text-block :text text))
-                                  items))))
-                       ((%wml-p node "tbl")
-                        (push (%wml-table node style-levels) items))
-                       ((equal +markup-compatibility-namespace+
-                               (stack-xml:xml-element-namespace-uri node))
-                        (when (string= name "AlternateContent")
-                          (let ((choice (find-if #'stack-xml:xml-element-p
-                                                 (stack-xml:xml-element-children node))))
-                            (when choice (walk choice)))))
-                       ((and (%wml-p node)
-                             (member name +wml-skipped-blocks+ :test #'string=)))
-                       (t (walk node))))))))
+                      ((%wml-p node "p")
+                       (multiple-value-bind (text boxes) (%wml-paragraph-text node)
+                         (let ((level (and headings (%wml-heading-level node style-levels))))
+                           (when (plusp (length text))
+                             (push (if level
+                                       (list :heading level text)
+                                       (make-text-block :text text))
+                                   items)))
+                         (dolist (box boxes)
+                           (dolist (item (%wml-flow box style-levels :headings nil))
+                             (push item items)))))
+                      ((%wml-p node "tbl")
+                       (let ((table (%wml-table node style-levels)))
+                         (when table (push table items))))
+                      ((equal +markup-compatibility-namespace+
+                              (stack-xml:xml-element-namespace-uri node))
+                       (when (string= name "AlternateContent")
+                         (let ((choice (find-if #'stack-xml:xml-element-p
+                                                (stack-xml:xml-element-children node))))
+                           (when choice (walk choice)))))
+                      ((and (%wml-p node)
+                            (member name +wml-skipped-blocks+ :test #'string=)))
+                      (t (walk node))))))))
       (walk container))
     (nreverse items)))
 
@@ -426,10 +523,10 @@
     (nreverse cells)))
 
 (defun %wml-table (tbl style-levels)
-  "TABLE-BLOCK of the w:tbl TBL. w:gridSpan sets col-span, w:vMerge
-   restart / continue sets row-span, w:gridBefore skips grid columns,
-   rows marked w:tblHeader are header cells. Spans are also listed as
-   merged regions."
+  "TABLE-BLOCK of the w:tbl TBL, or NIL when *MAX-TABLE-CELLS* leaves it
+   out. w:gridSpan sets col-span, w:vMerge restart / continue sets
+   row-span, w:gridBefore skips grid columns, rows marked w:tblHeader are
+   header cells. Spans are also listed as merged regions."
   (let* ((grid-cols (length (%ns-children (%wml-child tbl "tblGrid")
                                           +wml-namespaces+ "gridCol")))
          (cols grid-cols)
@@ -459,16 +556,17 @@
         (setf cols (max cols col))
         (incf row)))
     (let ((cells (nreverse cells)))
-      (make-table-block
-       :rows row :cols cols :cells cells
-       :merged (loop for cell in cells
-                     when (or (> (table-cell-row-span cell) 1)
-                              (> (table-cell-col-span cell) 1))
-                       collect (make-instance 'merged-region
-                                              :row (table-cell-row cell)
-                                              :col (table-cell-col cell)
-                                              :row-span (table-cell-row-span cell)
-                                              :col-span (table-cell-col-span cell)))))))
+      (%office-table-block
+       row cols cells
+       (loop for cell in cells
+             when (or (> (table-cell-row-span cell) 1)
+                      (> (table-cell-col-span cell) 1))
+               collect (make-instance 'merged-region
+                                      :row (table-cell-row cell)
+                                      :col (table-cell-col cell)
+                                      :row-span (table-cell-row-span cell)
+                                      :col-span (table-cell-col-span cell)))
+       :docx))))
 
 (defun %wml-document-blocks (root style-levels)
   "Top-level blocks of the w:document ROOT, nested under its headings."
@@ -577,8 +675,9 @@
 
 (defun %sml-worksheet-table (root shared-strings)
   "TABLE-BLOCK of a worksheet's <sheetData>, cropped to the cells that hold
-   a value (row 0 / col 0 is the first used one), or NIL for an empty
-   sheet. <mergeCells> set the spans of their top-left cell."
+   a value (row 0 / col 0 is the first used one), or NIL for an empty sheet
+   (or one *MAX-TABLE-CELLS* leaves out). <mergeCells> set the spans of
+   their top-left cell."
   (let ((values '())
         (next-row 0))
     (dolist (row (%sml-children (%sml-child root "sheetData") "row"))
@@ -598,27 +697,27 @@
              (c0 (reduce #'min values :key #'second))
              (rows (1+ (- (reduce #'max values :key #'first) r0)))
              (cols (1+ (- (reduce #'max values :key #'second) c0)))
+             (at (make-hash-table :test #'equal))
              (cells (mapcar (lambda (v)
                               (destructuring-bind (r c text) v
-                                (make-table-cell :row (- r r0) :col (- c c0)
-                                                 :content (list (make-text-block :text text)))))
+                                (setf (gethash (cons (- r r0) (- c c0)) at)
+                                      (make-table-cell :row (- r r0) :col (- c c0)
+                                                       :content (list (make-text-block :text text))))))
                             values))
              (merged '()))
         (dolist (m (%sml-children (%sml-child root "mergeCells") "mergeCell"))
           (multiple-value-bind (r c row-span col-span) (%range-reference (%attr m "ref"))
             (when (and r (>= r r0) (>= c c0) (< (- r r0) rows) (< (- c c0) cols))
-              (let ((r (- r r0))
-                    (c (- c c0)))
+              (let* ((r (- r r0))
+                     (c (- c c0))
+                     (cell (gethash (cons r c) at)))
                 (push (make-instance 'merged-region :row r :col c
                                                     :row-span row-span :col-span col-span)
                       merged)
-                (let ((cell (find-if (lambda (x)
-                                       (and (= r (table-cell-row x)) (= c (table-cell-col x))))
-                                     cells)))
-                  (when cell
-                    (setf (table-cell-row-span cell) row-span
-                          (table-cell-col-span cell) col-span)))))))
-        (make-table-block :rows rows :cols cols :cells cells :merged (nreverse merged))))))
+                (when cell
+                  (setf (table-cell-row-span cell) row-span
+                        (table-cell-col-span cell) col-span))))))
+        (%office-table-block rows cols cells (nreverse merged) :xlsx)))))
 
 (defun %sml-sheet-section (title root shared-strings)
   "Section block TITLE (the sheet name) holding the sheet's table, if any."

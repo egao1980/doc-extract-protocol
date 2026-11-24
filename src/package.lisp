@@ -166,6 +166,7 @@
 
            #:zip-available-p
            #:html-backend-bound-p
-           #:xml-backend-bound-p))
+           #:xml-backend-bound-p
+           #:*max-table-cells*))
 
 (in-package #:doc-extract-protocol)
