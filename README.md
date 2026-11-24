@@ -45,7 +45,7 @@ HTML uses `html-protocol` when `*html-backend*` is bound; otherwise a tag-strip 
 
 ## DOCX and XLSX
 
-Office Open XML packages (transitional and strict) are read with `compression-protocol` (zip, deflate by `compression-backend-chipz`) and parsed with `xml-protocol` (`xml-backend-native`). Both are dependencies, so `(asdf:load-system "doc-extract-protocol")` is enough. Parts are found through the package relationships (`_rels/.rels`, `*.rels`), so non-default part names work.
+Office Open XML packages (transitional and strict) are read with `compression-protocol` (zip, deflate by `compression-backend-chipz`) and parsed with `xml-protocol` (`xml-backend-native`). Both are dependencies, so `(asdf:load-system "doc-extract-protocol")` is enough. Parts are found through the package relationships (`_rels/.rels`, `*.rels`), so non-default part names work. A package that stores a zip-based part uncompressed (an embedded `.xlsx` holding a chart's data, re-zipped with zipfile's default `ZIP_STORED`) opens as it does in python-docx and openpyxl (compression-protocol 0.5.1).
 
 | Format | `extract-document` | `extract-sections` | `extract-text` |
 |--------|--------------------|--------------------|----------------|

@@ -9,8 +9,9 @@
                ;; DOCX / XLSX: zip parts read with compression-protocol (deflate by
                ;; the chipz backend), parsed with xml-protocol (native backend).
                ;; Damaged input signals their own conditions (compression-error,
-               ;; xml-error) from these versions on; office.lisp wraps them.
-               (:version "compression-protocol" "0.5.0")
+               ;; xml-error) from these versions on; office.lisp wraps them. 0.5.1 takes
+               ;; the last end-of-central-directory record (a stored embedded package).
+               (:version "compression-protocol" "0.5.1")
                (:version "compression-backend-chipz" "0.3.0")
                (:version "xml-protocol" "0.1.0") (:version "xml-backend-native" "0.1.1"))
   :serial t
